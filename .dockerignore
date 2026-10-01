@@ -1,0 +1,9 @@
+.git
+.agents
+.github
+.env
+target
+*.log
+README.md
+docs
+skills-lock.json

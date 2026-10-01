@@ -30,7 +30,7 @@ public class YoutubeAudioExtractor {
         Path directory = Files.createTempDirectory("sermon-audio-");
         try {
             progress.accept("DOWNLOADING");
-            processes.run(List.of(downloader, "--ignore-config", "--no-playlist", "--no-progress", "--no-warnings",
+            processes.run(List.of(downloader, "--ignore-config", "--js-runtimes", "node", "--no-playlist", "--no-progress", "--no-warnings",
                     "--max-filesize", Long.toString(maxDownloadBytes), "-f", "bestaudio/best",
                     "-o", directory.resolve("source.%(ext)s").toString(), "--", video.canonicalUrl()));
             Path source;
