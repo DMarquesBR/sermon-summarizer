@@ -28,14 +28,14 @@ public class GroqTranscriber {
 
     public boolean isConfigured() { return apiKey.isPresent() && !apiKey.orElseThrow().isBlank(); }
 
-    public Transcript transcribe(Path audio, long offsetSeconds, String language) throws IOException, InterruptedException {
+    public Transcript transcribe(Path audio, long offsetSeconds) throws IOException, InterruptedException {
         if (!isConfigured()) throw new IllegalStateException("GROQ_API_KEY não configurada.");
         String boundary = "sermon-" + UUID.randomUUID();
         var parts = new ArrayList<HttpRequest.BodyPublisher>();
         field(parts, boundary, "model", "whisper-large-v3-turbo");
         field(parts, boundary, "response_format", "verbose_json");
         field(parts, boundary, "timestamp_granularities[]", "segment");
-        if (language != null && !language.isBlank()) field(parts, boundary, "language", language);
+        field(parts, boundary, "language", "pt");
         parts.add(HttpRequest.BodyPublishers.ofString("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n"));
         parts.add(HttpRequest.BodyPublishers.ofFile(audio));
         parts.add(HttpRequest.BodyPublishers.ofString("\r\n--" + boundary + "--\r\n"));

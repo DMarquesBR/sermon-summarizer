@@ -7,7 +7,7 @@ Backend para transcrever pregações do YouTube e, nas próximas etapas, gerar r
 
 ## Transcrição implementada
 
-O backend Java 25/Quarkus 3.33 recebe uma URL pública de vídeo, baixa a melhor faixa de áudio disponível com `yt-dlp` (ou o vídeo quando necessário), recorta e converte com `ffmpeg`, envia o MP3 à Groq (`whisper-large-v3-turbo`) e devolve texto e segmentos temporizados. Vídeo e áudio são removidos após o job. O limite inicial é de 90 minutos por transcrição e 25 MB para o MP3 enviado à Groq.
+O backend Java 25/Quarkus 3.33 recebe uma URL pública de vídeo, baixa a melhor faixa de áudio disponível com `yt-dlp` (ou o vídeo quando necessário), recorta e converte com `ffmpeg`, envia o MP3 à Groq (`whisper-large-v3-turbo`) e devolve texto e segmentos temporizados. Os áudios são sempre em português brasileiro; todas as chamadas de transcrição enviam `language=pt` explicitamente. Vídeo e áudio são removidos após o job. O limite inicial é de 90 minutos por transcrição e 25 MB para o MP3 enviado à Groq.
 
 Requisitos locais: JDK 25 configurado em `JAVA_HOME`, `yt-dlp`, `ffmpeg` e `ffprobe` no `PATH`. O projeto inclui Maven Wrapper. Em macOS com Homebrew: `brew install yt-dlp ffmpeg`. Configure `GROQ_API_KEY` no ambiente; caminhos dos executáveis, limites e número de workers podem ser alterados em `src/main/resources/application.properties`.
 
@@ -21,7 +21,7 @@ Criar um job:
 ```bash
 curl -X POST http://localhost:8080/api/transcription-jobs \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://www.youtube.com/watch?v=ID_DO_VIDEO","startSeconds":60,"endSeconds":180,"language":"pt"}'
+  -d '{"url":"https://www.youtube.com/watch?v=ID_DO_VIDEO","startSeconds":60,"endSeconds":180}'
 ```
 
 A resposta `202` contém `jobId` e `statusUrl`. Consulte `GET /api/transcription-jobs/{jobId}` até `COMPLETED`; o campo `transcript` contém o texto e os segmentos. A documentação OpenAPI fica em `/q/swagger-ui`.

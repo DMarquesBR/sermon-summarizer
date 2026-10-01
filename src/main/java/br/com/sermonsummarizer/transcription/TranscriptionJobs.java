@@ -29,21 +29,18 @@ public class TranscriptionJobs {
                 new ArrayBlockingQueue<>(32), Thread.ofVirtual().factory(), new ThreadPoolExecutor.AbortPolicy());
     }
 
-    public UUID submit(YoutubeUrl url, Long start, Long end, String language) {
+    public UUID submit(YoutubeUrl url, Long start, Long end) {
         if (start != null && start < 0 || end != null && end <= (start == null ? 0 : start)) {
             throw new IllegalArgumentException("Intervalo inválido.");
         }
         if (end != null && end - (start == null ? 0 : start) > maxClipSeconds) {
             throw new IllegalArgumentException("Trecho excede o limite de duração.");
         }
-        if (language != null && !language.matches("[a-z]{2,3}")) {
-            throw new IllegalArgumentException("Idioma deve ser um código ISO minúsculo, como pt.");
-        }
         jobs.entrySet().removeIf(entry -> entry.getValue().finishedAt != null && entry.getValue().finishedAt.isBefore(Instant.now().minusSeconds(3600)));
         UUID id = UUID.randomUUID();
         jobs.put(id, new Job(id, url.videoId(), Instant.now()));
         try {
-            executor.submit(() -> run(jobs.get(id), url, start, end, language));
+            executor.submit(() -> run(jobs.get(id), url, start, end));
         } catch (RejectedExecutionException exception) {
             jobs.remove(id);
             throw exception;
@@ -53,11 +50,11 @@ public class TranscriptionJobs {
 
     public Job get(UUID id) { return jobs.get(id); }
 
-    private void run(Job job, YoutubeUrl url, Long start, Long end, String language) {
+    private void run(Job job, YoutubeUrl url, Long start, Long end) {
         try {
             try (var audio = extractor.extract(url, start, end, progress -> job.status = progress)) {
                 job.status = "TRANSCRIBING";
-                job.transcript = transcriber.transcribe(audio.file(), audio.offsetSeconds(), language);
+                job.transcript = transcriber.transcribe(audio.file(), audio.offsetSeconds());
                 job.status = "COMPLETED";
             }
         } catch (Exception exception) {

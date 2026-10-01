@@ -29,7 +29,7 @@ public class TranscriptionResource {
         if (!transcriber.isConfigured()) return Response.status(503).entity(new Error("GROQ_API_KEY não configurada.")).build();
         try {
             YoutubeUrl video = YoutubeUrl.parse(request.url());
-            UUID id = jobs.submit(video, request.startSeconds(), request.endSeconds(), request.language());
+            UUID id = jobs.submit(video, request.startSeconds(), request.endSeconds());
             URI location = URI.create("/api/transcription-jobs/" + id);
             return Response.accepted(new Submitted(id, location.toString())).location(location).build();
         } catch (IllegalArgumentException exception) {
@@ -46,7 +46,7 @@ public class TranscriptionResource {
         return job;
     }
 
-    public record Request(String url, Long startSeconds, Long endSeconds, String language) {}
+    public record Request(String url, Long startSeconds, Long endSeconds) {}
     public record Submitted(UUID jobId, String statusUrl) {}
     public record Error(String message) {}
 }
