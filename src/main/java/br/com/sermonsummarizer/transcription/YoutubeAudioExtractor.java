@@ -1,5 +1,6 @@
 package br.com.sermonsummarizer.transcription;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -16,6 +17,7 @@ import java.util.function.Consumer;
 @ApplicationScoped
 public class YoutubeAudioExtractor {
     @Inject ProcessRunner processes;
+    @Inject ObjectMapper mapper;
     @ConfigProperty(name = "sermon.yt-dlp.path") String downloader;
     @ConfigProperty(name = "sermon.ffmpeg.path") String ffmpeg;
     @ConfigProperty(name = "sermon.ffprobe.path") String ffprobe;
@@ -31,11 +33,16 @@ public class YoutubeAudioExtractor {
         try {
             progress.accept("DOWNLOADING");
             processes.run(List.of(downloader, "--ignore-config", "--js-runtimes", "node", "--no-playlist", "--no-progress", "--no-warnings",
-                    "--max-filesize", Long.toString(maxDownloadBytes), "-f", "bestaudio/best",
+                    "--write-info-json", "--max-filesize", Long.toString(maxDownloadBytes), "-f", "bestaudio/best",
                     "-o", directory.resolve("source.%(ext)s").toString(), "--", video.canonicalUrl()));
             Path source;
             try (var files = Files.list(directory)) {
-                source = files.filter(path -> path.getFileName().toString().startsWith("source.") && Files.isRegularFile(path))
+                source = files.filter(path -> {
+                    String name = path.getFileName().toString();
+                    return name.startsWith("source.") && !name.endsWith(".info.json")
+                            && !name.endsWith(".part") && !name.endsWith(".ytdl")
+                            && !name.contains(".part-") && Files.isRegularFile(path);
+                })
                         .findFirst().orElseThrow(() -> new IOException("Download não produziu arquivo de mídia."));
             }
             if (Files.size(source) > maxDownloadBytes) throw new IOException("Download excede o limite de tamanho.");
@@ -58,10 +65,21 @@ public class YoutubeAudioExtractor {
             processes.run(command);
             if (!Files.isRegularFile(audio) || Files.size(audio) == 0) throw new IOException("Áudio extraído está vazio.");
             if (Files.size(audio) > 25_000_000) throw new IOException("Áudio extraído excede 25 MB; selecione um trecho menor.");
-            return new ExtractedAudio(directory, audio, start, end - start);
+            return new ExtractedAudio(directory, audio, start, end - start, readMetadata(directory.resolve("source.info.json")));
         } catch (IOException | InterruptedException | RuntimeException exception) {
             deleteDirectory(directory);
             throw exception;
+        }
+    }
+
+    private VideoMetadata readMetadata(Path file) {
+        try {
+            var root = mapper.readTree(file.toFile());
+            if (root == null || !root.path("title").isTextual() || root.path("title").asText().isBlank()) return null;
+            var description = root.path("description");
+            return new VideoMetadata(root.path("title").asText(), description.isTextual() ? description.asText() : "");
+        } catch (IOException exception) {
+            return null;
         }
     }
 
@@ -72,7 +90,7 @@ public class YoutubeAudioExtractor {
         }
     }
 
-    public record ExtractedAudio(Path directory, Path file, long offsetSeconds, double durationSeconds) implements AutoCloseable {
+    public record ExtractedAudio(Path directory, Path file, long offsetSeconds, double durationSeconds, VideoMetadata video) implements AutoCloseable {
         @Override public void close() throws IOException { deleteDirectory(directory); }
     }
 }

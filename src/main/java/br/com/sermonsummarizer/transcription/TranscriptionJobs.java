@@ -53,6 +53,7 @@ public class TranscriptionJobs {
     private void run(Job job, YoutubeUrl url, Long start, Long end) {
         try {
             try (var audio = extractor.extract(url, start, end, progress -> job.status = progress)) {
+                job.video = audio.video();
                 job.status = "TRANSCRIBING";
                 job.transcript = transcriber.transcribe(audio.file(), audio.offsetSeconds());
                 job.status = "COMPLETED";
@@ -74,6 +75,7 @@ public class TranscriptionJobs {
         public volatile String status = "QUEUED";
         public volatile Instant finishedAt;
         public volatile GroqTranscriber.Transcript transcript;
+        public volatile VideoMetadata video;
         public volatile String error;
 
         private Job(UUID id, String videoId, Instant createdAt) {

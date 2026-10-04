@@ -19,9 +19,9 @@ O fluxo definido é: **URL pública → download temporário → extração e re
 3. `GET /api/transcription-jobs/{id}` informa `QUEUED | DOWNLOADING | EXTRACTING | TRANSCRIBING | COMPLETED | FAILED`, resultado ou erro recuperável (`DOWNLOAD_UNAVAILABLE`, `AUDIO_EXTRACTION_FAILED`, `PROVIDER_LIMIT`, `VIDEO_UNAVAILABLE`, etc.). O frontend pode consultar periodicamente. O endpoint devolve a transcrição concluída; arquivos de vídeo/áudio são apagados após processamento, inclusive em falhas.
 4. `POST /api/transcripts` permite cadastrar texto fornecido pelo usuário como alternativa quando o provedor não atender. `GET /api/transcripts/{id}` devolve texto, segmentos quando houver, origem e revisão. `PUT /api/transcripts/{id}` recebe o texto editado e `expectedRevision`; salva nova revisão e rejeita conflito com `409`.
 5. `GET/POST/PUT/DELETE /api/templates` administra templates por canal, com nome, instruções, idioma, tom, público, tamanho alvo, formato e variáveis permitidas. Templates padrão são somente leitura; templates do usuário são versionados. Validar configuração e oferecer `POST /api/templates/{id}/preview-prompt` sem consumir LLM pode ajudar no futuro, mas não é necessário no MVP.
-6. `POST /api/generation-jobs` recebe `transcriptId`, `transcriptRevision`, `channel`, `templateId`, `templateRevision` e parâmetros permitidos (por exemplo `maxCharacters`). Retorna `202` e `jobId`. `GET /api/generation-jobs/{id}` devolve estado, texto gerado e metadados do modelo. O usuário pode editar o resultado depois; `PUT /api/generated-messages/{id}` guarda revisão final, se o produto precisar de histórico.
+6. `POST /api/generation-jobs` recebe `{ transcriptText, video?, customPrompt? }` e retorna `202`, `jobId` e `statusUrl`. A transcrição não vazia pode ser enviada ou editada pelo cliente; título e descrição do vídeo são opcionais. Sem `customPrompt` não vazio, usa as instruções padrão para sermões batistas e WhatsApp. Instruções personalizadas substituem somente a estrutura padrão; regras de fidelidade, idioma e tamanho são fixas. `GET /api/generation-jobs/{id}` devolve estado, texto, contagem de caracteres, modelo, origem do prompt, tokens usados ou erro estável. Entrada total limitada a 200.000 caracteres; saída a 2.000 caracteres Unicode. Um segundo pedido ao modelo pode condensar uma primeira saída longa; saída ainda acima do limite falha sem truncamento.
 
-Erros usam JSON estável com `code`, `message`, `retryable` e `details`. Requisições de criação aceitam chave de idempotência para evitar cobrança duplicada em repetição do clique.
+Erros usam JSON estável com `code`, `message` e `retryable`. Requisições de criação aceitam chave de idempotência para evitar cobrança duplicada em repetição do clique.
 
 ## Canais e templates
 
@@ -43,8 +43,8 @@ Campos controlados pelo servidor no prompt: papel, tarefa de resumir, formato do
 API REST
   ├─ Vídeo → YouTube metadata
   ├─ Transcrição → job persistido → yt-dlp → ffmpeg → Groq Whisper
-  ├─ Edição e templates → SQLite
-  └─ Geração → job persistido → OpenAI Responses API
+  ├─ Geração → job em memória → prompt fixo + padrão/personalizado → DeepSeek Chat Completions
+  └─ Segredos e limites → configuração Quarkus/.env
 ```
 
 - **Java 25 + Quarkus 3.33.x LTS**, em JVM inicialmente. Quarkus REST + Jackson, REST Client, Bean Validation, Scheduler, OpenAPI e Health. Selecionar o patch mais recente da linha 3.33 ao implementar.
@@ -53,24 +53,24 @@ API REST
 - A Groq aceita até 25 MB no plano gratuito e 100 MB no plano de desenvolvimento, conforme a documentação consultada. Arquivos maiores exigem divisão em partes com sobreposição, transcrição de cada parte e ajuste dos tempos. O custo total depende da duração processada; limitar tamanho, duração e número de tentativas.
 - Preferir baixar somente a faixa de áudio com `yt-dlp -f ba/b` quando disponível; isso evita transferir vídeo desnecessariamente. Se o formato exigir, baixar o contêiner de vídeo e extrair o áudio. Usar `ffprobe` para confirmar duração e faixa de áudio. Limitar bytes em disco, duração do processo e concorrência; limpar temporários em `finally` e periodicamente após reinício.
 - Worker com limite de concorrência, timeout e tentativas exponenciais apenas para erros transitórios. Guardar estados no banco e recuperar jobs órfãos após reinício. Registrar ID de correlação, duração e consumo, nunca chave de API nem transcrição completa em logs.
-- Segredos por variáveis de ambiente; cotas por usuário/IP, limite de duração e de caracteres, validação de URL, orçamento de tokens, autenticação antes de expor histórico e templates de múltiplos usuários. Definir retenção e exclusão de transcrições e resumos.
+- Segredos por variáveis de ambiente; cotas por usuário/IP, limite de duração e de caracteres, validação de URL, orçamento de tokens DeepSeek/Groq, autenticação antes de expor histórico e templates de múltiplos usuários. Definir retenção e exclusão de transcrições e resumos.
 
-## Geração com OpenAI
+## Geração com DeepSeek
 
-Usar a **Responses API** com modelo configurável e saída estruturada por canal (por exemplo `{subject, preview, body}` no e-mail; `{body}` no WhatsApp). Validar limites e campos após a resposta. Guardar IDs de template e revisão, ID de modelo, data, parâmetros e consumo retornado; não depender do modelo para impor sozinho o limite exato de caracteres. Para transcrições que excedam a janela ou orçamento, dividir por segmentos e consolidar resumos intermediários, mantendo a ligação com a fonte e evitando repetir trechos.
+O cliente usa `POST https://api.deepseek.com/chat/completions`, modelo configurável `deepseek-flash`, resposta não-streaming e modo thinking desativado. A chave vem de `DEEPSEEK_API_KEY`. O job mantém a transcrição e metadados como dados-fonte separados das instruções. A entrada total tem limite configurável de 200.000 caracteres. A saída é medida em pontos de código Unicode e limitada a 2.000 caracteres; se exceder, uma única chamada adicional recebe a fonte e as regras para condensar. A persistência, divisão de transcrições extensas e envio efetivo ao WhatsApp ficam fora desta fatia.
 
 ## Sequência de entrega
 
-**Estado em 01/10/2026:** a primeira fatia do backend já implementa `POST/GET /api/transcription-jobs`, download temporário com `yt-dlp`, extração/recorte com `ffmpeg` e transcrição pela Groq. Os jobs ficam em memória nesta etapa. Persistência em SQLite, metadados/miniatura, edição de texto, templates e geração de resumos continuam planejados.
+**Estado em 03/10/2026:** o backend implementa `POST/GET /api/transcription-jobs`, download temporário com `yt-dlp`, extração/recorte com `ffmpeg` e transcrição pela Groq. Também implementa `POST/GET /api/generation-jobs`, resumo com DeepSeek, prompt padrão e estrutura personalizada. Ambos os jobs ficam em memória. Persistência em SQLite, autenticação, edição e templates versionados continuam planejados.
 
 1. **Prova técnica e de conformidade:** testar `yt-dlp` + `ffmpeg` + Groq com vídeos públicos em português, com/sem legendas, curtos/longos e recortes. Medir falhas, tempo, tamanho, qualidade e custo. Verificar os termos e a autorização necessária antes de oferecer download de vídeos de terceiros em produção.
-2. **MVP de API:** resolver URL, baixar e extrair áudio, transcrever com Groq, aceitar transcrição manual, permitir edição, oferecer dois templates padrão e templates personalizados, gerar para WhatsApp/e-mail, persistir jobs e publicar OpenAPI.
+2. **MVP de API:** resolver URL, baixar e extrair áudio, transcrever com Groq, aceitar transcrição manual, permitir edição, administrar templates, gerar para WhatsApp e e-mail e persistir jobs.
 3. **Operação:** autenticação e isolamento por usuário, políticas de retenção, métricas/custos, cotas e monitoramento.
 
 ## Decisões em aberto
 
 1. Haverá contas de usuário desde o MVP, ou uma instalação privada para um único operador? Isto muda autenticação e modelo de dados.
-2. Qual limite de duração/volume diário e qual orçamento mensal aceitável para OpenAI e Groq?
+2. Qual limite de duração/volume diário e qual orçamento mensal aceitável para DeepSeek e Groq?
 3. Qual será a conclusão da avaliação dos termos do YouTube para o lançamento público deste fluxo de download e extração?
 
 ## Fontes técnicas
@@ -78,8 +78,7 @@ Usar a **Responses API** com modelo configurável e saída estruturada por canal
 - [Quarkus 3.33 LTS e suporte a Java 25](https://quarkus.io/blog/quarkus-3-33-released/)
 - [Quarkus REST Client](https://quarkus.io/guides/rest-client/)
 - [Quarkus e SQLite](https://quarkus.io/guides/datasource/)
-- [OpenAI Responses API para texto](https://developers.openai.com/api/docs/guides/text)
-- [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
 - [YouTube captions.download](https://developers.google.com/youtube/v3/docs/captions/download)
 - [Políticas da API do YouTube](https://developers.google.com/youtube/terms/developer-policies)
 - [Groq Speech to Text](https://console.groq.com/docs/speech-to-text)
